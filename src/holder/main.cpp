@@ -6,8 +6,6 @@
 #include <string>
 #include <vector>
 
-std::vector<HANDLE> handles;
-std::vector<void*> addresses;
 const DWORD size = 0x100000;
 
 static void create_file_mapping(const char* name)
@@ -57,85 +55,70 @@ static void create_file_mapping(const char* name)
     else
         std::cout << "File '" << filename << "' not found or cannot be opened. "
                   << "Memory mapping created with zero-initialized data." << std::endl;
-    
-    
-    handles.push_back(handle);
-    addresses.push_back(address);
 }
-
-static bool dump_file_mapping_to_file(const std::string& mapping_name)
+static void dump_file_mapping(const char* name)
 {
-    std::string filename = mapping_name + ".bin";
-    HANDLE mapping_handle = OpenFileMappingA(FILE_MAP_READ, FALSE, mapping_name.c_str());
-    if (mapping_handle == NULL)
+    HANDLE handle = OpenFileMappingA(FILE_MAP_READ, FALSE, name);
+    if (handle == nullptr)
     {
-        std::cout << "Failed to open file mapping: " << mapping_name << " Error: " << GetLastError() << std::endl;
-        return false;
+        std::cout << "Failed to open file mapping: " << name << " (Error: " << GetLastError() << ")" << std::endl;
+        return;
     }
-
-    void* mapped_view = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, 0);
-    if (mapped_view == NULL)
+    
+    void* address = MapViewOfFile(handle, FILE_MAP_READ, 0, 0, 0);
+    if (address == nullptr)
     {
-        std::cout << "Failed to map view of file: " << mapping_name << " Error: " << GetLastError() << std::endl;
-        CloseHandle(mapping_handle);
-        return false;
+        CloseHandle(handle);
+        std::cout << "Failed to map view of file: " << name << " (Error: " << GetLastError() << ")" << std::endl;
+        return;
     }
-
+    
+    // Получаем реальный размер маппинга
     MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(mapped_view, &mbi, sizeof(mbi)) == 0)
+    if (VirtualQuery(address, &mbi, sizeof(mbi)) == 0)
     {
-        std::cout << "Failed to query memory info for: " << mapping_name << " Error: " << GetLastError() << std::endl;
-        UnmapViewOfFile(mapped_view);
-        CloseHandle(mapping_handle);
-        return false;
+        UnmapViewOfFile(address);
+        CloseHandle(handle);
+        std::cout << "Failed to query memory info for: " << name << std::endl;
+        return;
     }
-
-    std::ofstream file(filename, std::ios::binary | std::ios::trunc);
+    
+    SIZE_T actual_size = mbi.RegionSize;
+    
+    std::string filename = std::string(name) + ".bin";
+    std::ofstream file(filename, std::ios::binary);
+    
     if (!file.is_open())
     {
-        std::cout << "Failed to create file: " << filename << std::endl;
-        UnmapViewOfFile(mapped_view);
-        CloseHandle(mapping_handle);
-        return false;
+        UnmapViewOfFile(address);
+        CloseHandle(handle);
+        std::cout << "Failed to create dump file: " << filename << std::endl;
+        return;
     }
-
-    file.write(static_cast<const char*>(mapped_view), mbi.RegionSize);
     
-    if (file.fail())
+    file.write(static_cast<const char*>(address), actual_size);
+    
+    if (file.good())
     {
-        std::cout << "Failed to write data to file: " << filename << std::endl;
-        file.close();
-        UnmapViewOfFile(mapped_view);
-        CloseHandle(mapping_handle);
-        return false;
+        std::cout << "Successfully dumped " << actual_size << " bytes from mapping '" 
+                  << name << "' to file '" << filename << "'" << std::endl;
     }
-
-    file.close();
-    UnmapViewOfFile(mapped_view);
-    CloseHandle(mapping_handle);
-
-    std::cout << "Successfully dumped " << mbi.RegionSize << " bytes from mapping '" 
-              << mapping_name << "' to file '" << filename << "'" << std::endl;
+    else
+    {
+        std::cout << "Failed to write data to dump file: " << filename 
+                  << " (failbit: " << file.fail() << ", badbit: " << file.bad() << ")" << std::endl;
+    }
     
-    return true;
+    file.close();
+    UnmapViewOfFile(address);
+    CloseHandle(handle);
 }
 
-int main(int argc, char* argv[])
+int main(int argc, char* argv[]) 
 {
     CreateEventA(nullptr, TRUE, FALSE, "FPSMonitorGlobalShutdownEvent_64");
     CreateMutexA(nullptr, FALSE, "FPSMonitor_FrameTimesBufferExMutex");
     CreateMutexA(nullptr, FALSE, "FPSMonitorMultirunMutex");
-
-    dump_file_mapping_to_file("FPSMonitor_Memory_CaptureInfo");
-    dump_file_mapping_to_file("FPSMonitor_FrameTimesBuffer");
-    dump_file_mapping_to_file("FPSMonitor_FrameTimesBufferEx");
-    dump_file_mapping_to_file("FPSMonitor_Memory_FrameBuffer");
-    dump_file_mapping_to_file("FPSMonitorSteamInterfaceData");
-    dump_file_mapping_to_file("FPSMonitorOverlayIndexBuffer");
-    dump_file_mapping_to_file("FPSMonitorOverlayBuffer_2");
-    dump_file_mapping_to_file("FPSMonitorOverlayBuffer_3");
-    dump_file_mapping_to_file("FPSMonitorOverlayBuffer_4");
-    dump_file_mapping_to_file("FPSMonitorOverlayBuffer_5");
     
     create_file_mapping("FPSMonitor_Memory_CaptureInfo");
     create_file_mapping("FPSMonitor_FrameTimesBuffer");
@@ -143,10 +126,6 @@ int main(int argc, char* argv[])
     create_file_mapping("FPSMonitor_Memory_FrameBuffer");
     create_file_mapping("FPSMonitorSteamInterfaceData");
     create_file_mapping("FPSMonitorOverlayIndexBuffer");
-    create_file_mapping("FPSMonitorOverlayBuffer_2"); // буффер отрисовки
-    create_file_mapping("FPSMonitorOverlayBuffer_3"); // буффер отрисовки
-    create_file_mapping("FPSMonitorOverlayBuffer_4"); // буффер отрисовки 
-    create_file_mapping("FPSMonitorOverlayBuffer_5"); // буффер отрисовки
     system("fps-mon64.exe /start");  // NOLINT(concurrency-mt-unsafe)
     return getchar();
 }
